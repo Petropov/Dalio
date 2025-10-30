@@ -1,0 +1,8 @@
+cat > requirements.txt << 'EOF'
+yfinance>=0.2.43
+pandas>=2.2.2
+numpy>=1.26.4
+plotly>=5.24.1
+scipy>=1.13.1
+pandas_datareader>=0.10.0
+EOF
