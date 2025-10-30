@@ -1,0 +1,69 @@
+mkdir -p .github/workflows
+cat > .github/workflows/daily-email.yml << 'EOF'
+name: Daily Dashboard Email
+
+on:
+  schedule:
+    - cron: "30 6 * * *"   # 06:30 UTC → ~07:30 Paris (winter) / 08:30 (summer)
+  workflow_dispatch: {}
+
+jobs:
+  build-and-email:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run dashboard
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}  # optional
+        run: |
+          python dashboard.py
+          test -f report.html
+
+      - name: Extract inline HTML
+        id: inline_html
+        run: |
+          echo "html<<'EOF'" >> $GITHUB_OUTPUT
+          cat report.html >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Send email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "Cross-Asset Rotation Dashboard — $(date -u +'%Y-%m-%d')"
+          from: ${{ secrets.FROM_EMAIL }}
+          to: ${{ secrets.TO_EMAIL }}
+          secure: true
+          priority: high
+          convert_markdown: false
+          content_type: text/html
+          body: |
+            <!doctype html>
+            <html><body>
+            <p>Daily build of the dashboard is attached. Inline preview below.</p>
+            <hr>
+            ${{ steps.inline_html.outputs.html }}
+            </body></html>
+          attachments: report.html
+
+      - name: Upload artifact (optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: report.html
+          path: report.html
+EOF
