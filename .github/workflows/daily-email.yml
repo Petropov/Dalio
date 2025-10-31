@@ -43,7 +43,7 @@ jobs:
             echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Send email
+     - name: Send email
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
@@ -54,16 +54,8 @@ jobs:
           to: ${{ secrets.TO_EMAIL }}
           subject: "Cross-Asset Rotation Dashboard — ${{ github.repository }} — $(date -u +'%Y-%m-%d')"
           secure: true
-          priority: high
-          convert_markdown: false
-          content_type: text/html
-          body: |
-            <!doctype html>
-            <html><body>
-            <p>Daily build of the dashboard is attached. Inline preview below.</p>
-            <hr>
-            ${{ steps.inline_html.outputs.html }}
-            </body></html>
+          content_type: text/plain
+          body: "Daily build attached: report.html"
           attachments: report.html
 
       - name: Upload artifact (optional)
