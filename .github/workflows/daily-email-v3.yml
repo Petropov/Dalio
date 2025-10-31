@@ -29,12 +29,12 @@ jobs:
           python dashboard.py
           ls -lh report.html
 
-      - name: Send email (attachment only)
-        uses: dawidd6/action-send-mail@v3
-        with:
+          - name: Send email (attachment only)
+         uses: dawidd6/action-send-mail@v3
+         with:
           server_address: ${{ secrets.SMTP_SERVER }}
           server_port: ${{ secrets.SMTP_PORT }}
-          secure: false       # important for port 587
+          secure: false          # for port 587; set true if you use 465
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
           from: ${{ secrets.FROM_EMAIL }}
@@ -42,7 +42,6 @@ jobs:
           subject: "Cross-Asset Rotation Dashboard — ${{ github.repository }} — $(date -u +'%Y-%m-%d')"
           body: "Daily build attached: report.html"
           attachments: report.html
-
 
       - name: Upload artifact (optional)
         uses: actions/upload-artifact@v4
