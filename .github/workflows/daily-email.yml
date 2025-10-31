@@ -6,7 +6,7 @@ on:
   workflow_dispatch: {}
 
 jobs:
-    build-and-email:
+  build-and-email:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -22,14 +22,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-     - name: Run dashboard
+      - name: Run dashboard
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: |
           python dashboard.py
           ls -lh report.html
 
-     - name: Extract inline HTML
+      - name: Extract inline HTML
         id: inline_html
         shell: bash
         run: |
