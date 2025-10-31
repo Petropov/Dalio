@@ -400,10 +400,10 @@ foot = f"""
 
 msg = f"""
 🧭 <b>Cycle snapshot – {bucketed.index[-1].date():%b %d %Y}</b><br>
-<b>Where we are:</b> Risk-on buckets = {curr_series[['{0}','{1}','{2}','{3}'].format(BUCKET_EQ,BUCKET_CR,BUCKET_CMD,BUCKET_CRY)].sum():.1f}% vs baseline ~{RISK_ON_BASELINE:.0f}%; Risk-off = {curr_series[['{0}','{1}','{2}','{3}'].format(BUCKET_RT,BUCKET_GLD,BUCKET_FX,BUCKET_CASH)].sum():.1f}%.<br>
+<b>Where we are:</b> Risk-on buckets = {curr_series[risk_on_names].sum():.1f}% vs baseline ~{RISK_ON_BASELINE:.0f}%; Risk-off = {curr_series[risk_off_names].sum():.1f}%.<br>
 <b>What’s changing:</b> Top risers vs {MOM_COMPARE} → {', '.join([f'{k} (+{v:.1f}pp)' for k,v in (curr_series-ref_series).sort_values().tail(2).items()])}. 
 Top fallers → {', '.join([f'{k} ({v:.1f}pp)' for k,v in (curr_series-ref_series).sort_values().head(2).items()])}.<br>
-<b>Why:</b> {', '.join(['real policy restrictive' if rp_v=='tight' else ('financial conditions tight' if nf_v=='tight' else ('curve inverted' if sl_v=='inv' else 'drivers mixed'))])}.
+<b>Why:</b> {', '.join(drivers_flags)}.
 """
 
 snapshot_html = f"<div class='rot-wrap'><div class='note'>{msg}</div></div>"
