@@ -65,4 +65,3 @@ jobs:
         with:
           name: report.html
           path: report.html
-EOF
