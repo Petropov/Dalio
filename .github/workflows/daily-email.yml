@@ -1,9 +1,8 @@
-
 name: Daily Dashboard Email
 
 on:
   schedule:
-    - cron: "30 6 * * *"   # 06:30 UTC → ~07:30 Paris (winter) / 08:30 (summer)
+    - cron: "30 6 * * *"   # 06:30 UTC → ~07:30 Paris / 08:30 summer
   workflow_dispatch: {}
 
 jobs:
@@ -30,15 +29,14 @@ jobs:
           python dashboard.py
           test -f report.html
 
-     - name: Extract inline HTML
-       id: inline_html
-       run: |
-        {
-        echo "html<<EOF"
-        cat report.html
-        echo "EOF"
-        } | tee -a "$GITHUB_OUTPUT"
-
+      - name: Extract inline HTML
+        id: inline_html
+        run: |
+          {
+            echo "html<<EOF"
+            cat report.html
+            echo "EOF"
+          } | tee -a "$GITHUB_OUTPUT"
 
       - name: Send email
         uses: dawidd6/action-send-mail@v3
@@ -47,9 +45,9 @@ jobs:
           server_port: ${{ secrets.SMTP_PORT }}
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "Cross-Asset Rotation Dashboard — $(date -u +'%Y-%m-%d')"
           from: ${{ secrets.FROM_EMAIL }}
           to: ${{ secrets.TO_EMAIL }}
+          subject: "Cross-Asset Rotation Dashboard — ${{ github.repository }} — $(date -u +'%Y-%m-%d')"
           secure: true
           priority: high
           convert_markdown: false
