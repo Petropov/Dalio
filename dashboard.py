@@ -1,5 +1,4 @@
 
-cat > dashboard.py << 'EOF'
 # (paste the entire dashboard.py from my previous message here)
 
 # dashboard.py
