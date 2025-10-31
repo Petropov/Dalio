@@ -1,12 +1,13 @@
-
-# (paste the entire dashboard.py from my previous message here)
+"""Generate the HTML dashboard summarizing cross-asset rotation."""
 
 # dashboard.py
+import time
+
+import numpy as np
+import pandas as pd
 import yfinance as yf
-import pandas as pd, numpy as np
-from scipy.stats import trim_mean
 from pandas_datareader import data as pdr
-import time, math
+from scipy.stats import trim_mean
 
 # -----------------------------
 # 0) Params & helpers
@@ -86,8 +87,13 @@ cash_label = BUCKET_CASH
 # 2) Prices (Yahoo, weekly)
 # -----------------------------
 raw = yf.download(
-    tickers, start=START, interval=INTERVAL,
-    auto_adjust=True, group_by="ticker", progress=False, threads=True
+    tickers,
+    start=START,
+    interval=INTERVAL,
+    auto_adjust=True,
+    group_by="ticker",
+    progress=False,
+    threads=True,
 )
 
 def extract_price_panels(df, tks):
