@@ -29,14 +29,19 @@ jobs:
           python dashboard.py
           test -f report.html
 
-      - name: Extract inline HTML
+     - name: Extract inline HTML
         id: inline_html
+        shell: bash
         run: |
+          # Unique delimiter avoids "matching delimiter not found"
+          DELIM="HTML_$(date +%s%N)"
+          # Trim inline preview to ~300KB to stay under $GITHUB_OUTPUT limits
+          head -c 300000 report.html > inline.html
           {
-            echo "html<<EOF"
-            cat report.html
-            echo "EOF"
-          } | tee -a "$GITHUB_OUTPUT"
+            echo "html<<$DELIM"
+            cat inline.html
+            echo "$DELIM"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Send email
         uses: dawidd6/action-send-mail@v3
