@@ -1,4 +1,4 @@
-name: Daily Dashboard Email
+name: Daily Dashboard Email v2
 
 on:
   schedule:
