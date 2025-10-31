@@ -34,15 +34,15 @@ jobs:
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
           server_port: ${{ secrets.SMTP_PORT }}
+          secure: false       # important for port 587
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
           from: ${{ secrets.FROM_EMAIL }}
           to: ${{ secrets.TO_EMAIL }}
           subject: "Cross-Asset Rotation Dashboard — ${{ github.repository }} — $(date -u +'%Y-%m-%d')"
-          secure: true
-          content_type: text/plain
           body: "Daily build attached: report.html"
           attachments: report.html
+
 
       - name: Upload artifact (optional)
         uses: actions/upload-artifact@v4
