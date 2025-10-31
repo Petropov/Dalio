@@ -1,5 +1,4 @@
-mkdir -p .github/workflows
-cat > .github/workflows/daily-email.yml << 'EOF'
+
 name: Daily Dashboard Email
 
 on:
