@@ -30,12 +30,15 @@ jobs:
           python dashboard.py
           test -f report.html
 
-      - name: Extract inline HTML
-        id: inline_html
-        run: |
-          echo "html<<'EOF'" >> $GITHUB_OUTPUT
-          cat report.html >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+     - name: Extract inline HTML
+       id: inline_html
+       run: |
+        {
+        echo "html<<EOF"
+        cat report.html
+        echo "EOF"
+        } | tee -a "$GITHUB_OUTPUT"
+
 
       - name: Send email
         uses: dawidd6/action-send-mail@v3
