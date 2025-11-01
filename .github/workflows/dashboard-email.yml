@@ -6,7 +6,7 @@ on:
 
 jobs:
   build-and-email:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,16 +31,19 @@ jobs:
       - name: Render PDF (wkhtmltopdf)
         run: |
           sudo apt-get update
-          sudo apt-get install -y wkhtmltopdf
-          wkhtmltopdf --enable-local-file-access --quiet report.html report.pdf
+          sudo apt-get install -y --no-install-recommends wkhtmltopdf fonts-dejavu-core
+          # Ensure local CSS/images are allowed and page fits A4 nicely
+          wkhtmltopdf --enable-local-file-access --dpi 144 --margin-top 10mm --margin-bottom 12mm --margin-left 12mm --margin-right 12mm \
+            --print-media-type --no-outline \
+            report.html report.pdf
           ls -lh report.pdf
 
-      - name: Send email (attachment only)
+      - name: Send email (PDF attached)
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.SMTP_SERVER }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          secure: false
+          server_address: ${{ secrets.SMTP_SEQUENCE != '' && secrets.SMTP_SEQUENCE || secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMT P_PORT }}
+          secure: false          # keep false for Gmail/SendGrid on port 587; set true only if using 465
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
           from: ${{ secrets.FROM_EMAIL }}
