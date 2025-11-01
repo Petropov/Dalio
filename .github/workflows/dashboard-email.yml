@@ -2,7 +2,7 @@ name: Dashboard Email
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 6 * * *"   # 06:30 UTC ~ 07:30 Paris (winter) / 08:30 (summer)
+    - cron: "30 6 * * *"
 
 jobs:
   build-and-email:
@@ -28,16 +28,29 @@ jobs:
           python dashboard.py
           ls -lh report.html
 
+      - name: Render PDF (wkhtmltopdf)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wkhtmltopdf
+          wkhtmltopdf --enable-local-file-access --quiet report.html report.pdf
+          ls -lh report.pdf
+
       - name: Send email (attachment only)
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
           server_port: ${{ secrets.SMTP_PORT }}
-          secure: false              # use false for port 587 (STARTTLS); true only for 465
+          secure: false
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
           from: ${{ secrets.FROM_EMAIL }}
           to: ${{ secrets.TO_EMAIL }}
           subject: "Cross-Asset Rotation Dashboard — ${{ github.repository }} — run ${{ github.run_number }}"
-          body: "Daily build attached: report.html"
-          attachments: report.html
+          body: "Daily build attached: report.pdf"
+          attachments: report.pdf
+
+      - name: Upload artifact (optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: report.pdf
+          path: report.pdf
