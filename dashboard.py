@@ -1,6 +1,3 @@
-
-# (paste the entire dashboard.py from my previous message here)
-
 # dashboard.py
 import yfinance as yf
 import pandas as pd, numpy as np
@@ -418,8 +415,37 @@ rotation_map = pd.DataFrame({
 })
 map_html = f"<div class='rot-wrap'><div class='scroll-x'>{rotation_map.to_html(index=False, classes='map-table', escape=False)}</div></div>"
 
-FULL_HTML = "".join(html) + foot + snapshot_html + map_html
+# ---------- FINAL HTML WRITE (UTF-8 scaffold to avoid mojibake) ----------
+DOC_TITLE = f"Cross-Asset Capital Rotation — Weekly ({date_str})"
+HTML_DOC = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{DOC_TITLE}</title>
+  {styles}
+  <style>
+    @media print {{
+      body {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+      .rot-wrap {{ max-width: 980px; margin: 0 auto; }}
+      .rot-table th, .rot-table td {{ padding: 6px 8px; }}
+    }}
+    body {{ background:#fff; }}
+  </style>
+</head>
+<body>
+  <div class="rot-wrap">
+    {hdr_html}
+  </div>
+  {drivers_html}
+  {"".join(html)}
+  {foot}
+  {snapshot_html}
+  {map_html}
+</body>
+</html>"""
+
 with open("report.html", "w", encoding="utf-8") as f:
-    f.write(FULL_HTML)
+    f.write(HTML_DOC)
 
 print("✅ wrote report.html")
