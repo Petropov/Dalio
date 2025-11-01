@@ -2,7 +2,7 @@ name: Dashboard Email
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 6 * * *"   # 06:30 UTC → ~07:30 Paris / 08:30 summer
+    - cron: "30 6 * * *"   # 06:30 UTC ~ 07:30 Paris (winter) / 08:30 (summer)
 
 jobs:
   build-and-email:
@@ -33,11 +33,11 @@ jobs:
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
           server_port: ${{ secrets.SMTP_PORT }}
-          secure: false
+          secure: false              # use false for port 587 (STARTTLS); true only for 465
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
           from: ${{ secrets.FROM_EMAIL }}
           to: ${{ secrets.TO_EMAIL }}
-          subject: "Cross-Asset Rotation Dashboard — ${{ github.repository }} — \$(date -u +'%Y-%m-%d')"
+          subject: "Cross-Asset Rotation Dashboard — ${{ github.repository }} — run ${{ github.run_number }}"
           body: "Daily build attached: report.html"
           attachments: report.html
