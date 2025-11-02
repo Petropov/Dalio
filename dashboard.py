@@ -149,19 +149,42 @@ df_export.to_csv(OUT_DIR / "buckets.csv", index=False)
 # ---------------------------------------------
 # 5) Compute WoW deltas + Rotation Index + save
 # ---------------------------------------------
-# Load last snapshot (Current % per bucket)
 snap_path = STATE_DIR / "last_snapshot.json"
+STATE_DIR.mkdir(exist_ok=True)
+
+# --- Load previous snapshot (if any) ---
 prior = {}
 if snap_path.exists():
     try:
         prior = json.loads(snap_path.read_text())
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ could not read prior snapshot: {e}")
         prior = {}
 
+# --- Week-over-week change (pp) ---
 df["WoW"] = df.apply(
-    lambda r: (float(r["Current"]) - float(prior.get(r["Bucket"], np.nan))) if r["Bucket"] in prior else np.nan,
+    lambda r: (float(r["Current"]) - float(prior.get(r["Bucket"], np.nan)))
+    if r["Bucket"] in prior
+    else np.nan,
     axis=1,
 )
 
-# Rotation Index: defensive minus cyclical (levels) and WoW
-lvl_def = df[df["Bucket"].isin(DEFENSIVE)]["Current"].sum_
+# --- Rotation Index: defensive minus cyclical (levels & WoW) ---
+lvl_def = df[df["Bucket"].isin(DEFENSIVE)]["Current"].sum()
+lvl_cyc = df[df["Bucket"].isin(CYCLICAL)]["Current"].sum()
+wow_def = df[df["Bucket"].isin(DEFENSIVE)]["WoW"].sum(skipna=True)
+wow_cyc = df[df["Bucket"].isin(CYCLICAL)]["WoW"].sum(skipna=True)
+
+rotation_index_lvl = lvl_def - lvl_cyc
+rotation_index_wow = wow_def - wow_cyc
+
+print(
+    f"Rotation Index (levels): {rotation_index_lvl:+.2f} pp | "
+    f"WoW change: {rotation_index_wow:+.2f} pp"
+)
+
+# --- Save snapshot for next run ---
+snap_dict = {row["Bucket"]: float(row["Current"]) for _, row in df.iterrows()}
+snap_path.write_text(json.dumps(snap_dict))
+print(f"✅ wrote snapshot: {snap_path.resolve()}")
+
