@@ -1,451 +1,374 @@
-# dashboard.py
+#!/usr/bin/env python3
+"""
+dashboard.py — Cross-Asset Capital Rotation (Weekly)
+
+What this script does (end-to-end):
+1) Downloads market data proxies for each bucket with yfinance
+2) Computes multi-horizon momentum and a normalized “share” per bucket
+3) Adds WoW delta using last week’s cached snapshot (data/last_week.parquet)
+4) Computes a headline Rotation Index (Risk-On → Risk-Off net flow, pp WoW)
+5) Appends to risk_on_share history and draws a 4-week sparkline
+6) Builds a compact heatmap (buckets × horizons) of z-scored momentum
+7) Writes a single HTML report at ./report.html
+
+No external API keys required. Internet access is required on first run.
+"""
+
+from __future__ import annotations
+import io
+import os
+from pathlib import Path
+from dataclasses import dataclass
+from typing import Dict, List
+
+import numpy as np
+import pandas as pd
 import yfinance as yf
-import pandas as pd, numpy as np
-from scipy.stats import trim_mean
-from pandas_datareader import data as pdr
-import time, math
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # -----------------------------
-# 0) Params & helpers
+# Config
 # -----------------------------
-START = "2018-01-01"
-INTERVAL = "1wk"
-ATR_WIN = 4
-BASELINE_WIN = 52
-VOL_WIN = 8
-MOM_COMPARE = "12M"          # or "6M"
-RISK_ON_BASELINE = 35.0      # % used in narrative baseline
 
-def hasnum(v):
-    return (v is not None) and (not (isinstance(v,(float,np.floating)) and np.isnan(v)))
+OUT_HTML = Path("report.html")
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
 
-def fmt(v, unit=""):
-    return f"{v:.2f}{unit}" if hasnum(v) else "—"
+LAST_WEEK_SNAPSHOT = DATA_DIR / "last_week.parquet"
+RISKON_HISTORY_CSV = DATA_DIR / "risk_on_share.csv"
 
-def fmt_chg3m(v, unit="pp"):
-    if not hasnum(v): return ""
-    sign = "▲" if v > 0 else ("▼" if v < 0 else "→")
-    return f" <span style='color:#6b7280'>({sign} {abs(v):.2f}{unit} / 3m)</span>"
+# Buckets and proxy tickers (keep simple, liquid ETFs / indices)
+BUCKETS: Dict[str, List[str]] = {
+    # Risk-ON
+    "Equities (Global)": ["VT"],                       # Vanguard Total World
+    "Credit / Carry":   ["LQD", "HYG"],                # IG & High Yield Credit
+    "Commodities":      ["DBC"],                       # Broad commodities
+    "Crypto / Spec":    ["BTC-USD"],                   # Bitcoin (spec proxy)
 
-def fmt_z(v):
-    return f" <span style='color:#6b7280'>z={v:+.2f}</span>" if hasnum(v) else ""
-
-def badge(text, kind):
-    colors = {"tight":"#ef4444","loose":"#16a34a","neutral":"#6b7280","inv":"#ef4444","steep":"#16a34a"}
-    return f'<span style="background:{colors.get(kind,"#6b7280")};color:#fff;padding:2px 6px;border-radius:999px;font-size:12px;font-weight:600">{text}</span>'
-
-def get_fred_series(code, start):
-    # If you have a FRED API key, set env FRED_API_KEY and pandas_datareader will use it.
-    for _ in range(3):
-        try:
-            s = pdr.DataReader(code, "fred", start=start).squeeze()
-            if isinstance(s, pd.DataFrame):
-                s = s.iloc[:,0]
-            return s.dropna()
-        except Exception:
-            time.sleep(1.2)
-    return pd.Series(dtype=float)
-
-# -----------------------------
-# 1) Market universe (tickers)
-# -----------------------------
-tickers = [
-    "UUP","CNYUSD=X","EURUSD=X",
-    "TLT","BNDX",
-    "HYG","EMB",
-    "SPY","EEM","EZU",
-    "DBC","CL=F",
-    "GLD",
-    "BTC-USD","ETH-USD"
-]
-
-BUCKET_EQ   = "Equities (global stocks)"
-BUCKET_CR   = "Credit / Carry (corp & EM bonds)"
-BUCKET_RT   = "Rates / Duration (govt bonds)"
-BUCKET_CMD  = "Commodities (energy & metals)"
-BUCKET_GLD  = "Gold (defensive hedge)"
-BUCKET_CRY  = "Crypto / Spec (BTC, ETH)"
-BUCKET_FX   = "USD & FX (US dollar & majors)"
-BUCKET_CASH = "Cash/Sidelines (synthetic)"
-
-bucket_map = {
-    "UUP": BUCKET_FX, "CNYUSD=X": BUCKET_FX, "EURUSD=X": BUCKET_FX,
-    "TLT": BUCKET_RT, "BNDX": BUCKET_RT,
-    "HYG": BUCKET_CR, "EMB": BUCKET_CR,
-    "SPY": BUCKET_EQ, "EEM": BUCKET_EQ, "EZU": BUCKET_EQ,
-    "DBC": BUCKET_CMD, "CL=F": BUCKET_CMD,
-    "GLD": BUCKET_GLD,
-    "BTC-USD": BUCKET_CRY, "ETH-USD": BUCKET_CRY,
-}
-cash_label = BUCKET_CASH
-
-# -----------------------------
-# 2) Prices (Yahoo, weekly)
-# -----------------------------
-raw = yf.download(
-    tickers, start=START, interval=INTERVAL,
-    auto_adjust=True, group_by="ticker", progress=False, threads=True
-)
-
-def extract_price_panels(df, tks):
-    closes, highs, lows = [], [], []
-    for t in tks:
-        sub = df[t]
-        closes.append(sub["Close"].rename(t))
-        highs.append(sub["High"].rename(t))
-        lows.append(sub["Low"].rename(t))
-    close = pd.concat(closes, axis=1)
-    high  = pd.concat(highs,  axis=1).reindex(close.index)
-    low   = pd.concat(lows,   axis=1).reindex(close.index)
-    keep = close.columns[~close.isna().all()]
-    close = close[keep].ffill().dropna(how="all")
-    high  = high[keep].ffill()
-    low   = low[keep].ffill()
-    return close, high, low
-
-close, high, low = extract_price_panels(raw, tickers)
-rets = close.pct_change()
-
-# -----------------------------
-# 3) Activity × Stability score
-# -----------------------------
-atr_pct = ((high - low) / close).rolling(ATR_WIN, min_periods=max(2, ATR_WIN//2)).mean()
-
-def trimmed_baseline(s, w=BASELINE_WIN, p=0.10):
-    return s.rolling(w, min_periods=max(12, w//4)).apply(lambda x: trim_mean(x, proportiontocut=p), raw=False)
-
-atr_base = atr_pct.copy()
-for c in atr_pct.columns:
-    atr_base[c] = trimmed_baseline(atr_pct[c])
-
-activity_mult = (atr_pct / atr_base).clip(0.25, 4.0)
-activity_weight = activity_mult.div(activity_mult.sum(1), axis=0)
-
-vol8 = rets.rolling(VOL_WIN, min_periods=max(4, VOL_WIN//2)).std()
-inv_vol = 1.0 / vol8.replace(0, np.nan)
-inv_vol_norm = inv_vol.div(inv_vol.median(axis=1), axis=0)
-
-idx = activity_weight.index.intersection(inv_vol_norm.index)
-activity_weight = activity_weight.loc[idx].fillna(0.0)
-inv_vol_norm = inv_vol_norm.loc[idx].ffill().fillna(1.0)
-score = (activity_weight * inv_vol_norm).replace([np.inf, -np.inf], np.nan).fillna(0.0)
-
-sum_score = score.sum(1)
-risk_share = score.div((1.0 + sum_score), axis=0)
-cash_share = (1.0 / (1.0 + sum_score)).rename(cash_label)
-
-bucketed = risk_share.rename(columns=bucket_map)
-bucketed = bucketed.T.groupby(level=0).sum().T
-bucketed[cash_label] = cash_share
-
-# -----------------------------
-# 4) Macro drivers (FRED robust) + derived dials
-# -----------------------------
-fred_series = {
-    "FEDFUNDS":"Policy rate (Fed Funds)",
-    "DFII10":"Real 10Y yield (TIPS)",
-    "T10YIE":"10Y inflation breakeven",
-    "M2SL":"M2 (money supply)",
-    "NFCI":"Financial conditions (NFCI)",
-    "TOTCI":"C&I loans",
-    "PCEPILFE":"Core PCE YoY (%)",
-    "T10Y2Y":"2s10s yield curve (10Y-2Y, %)"
-}
-fred = {code: get_fred_series(code, START) for code in fred_series}
-fred = pd.DataFrame({k:v for k,v in fred.items() if len(v)}).sort_index()
-for k in fred_series:
-    if k not in fred: fred[k] = np.nan
-fred = fred.sort_index()
-
-fred["M2SL_yoy"]   = fred["M2SL"].pct_change(52, fill_method=None) * 100
-fred["TOTCI_yoy"]  = fred["TOTCI"].pct_change(52, fill_method=None) * 100
-fred["FED_3m_bps"] = fred["FEDFUNDS"].diff(13) * 100
-fred["core_pce_yoy"]   = fred["PCEPILFE"]
-fred["real_policy"]    = fred["FEDFUNDS"] - fred["core_pce_yoy"]
-fred["slope_2s10s"]    = fred["T10Y2Y"]
-fred["NFCI_3m"]        = fred["NFCI"].diff(13)
-fred["real_policy_3m"] = fred["real_policy"].diff(13)
-fred["slope_2s10s_3m"] = fred["slope_2s10s"].diff(13)
-
-def zscore(s, win=520, minp=260):
-    m = s.rolling(win, min_periods=minp).mean()
-    sd = s.rolling(win, min_periods=minp).std()
-    return (s - m) / sd
-
-z_last = {
-    "real_policy_z": zscore(fred["real_policy"]).tail(1).iloc[0],
-    "NFCI_z":        zscore(fred["NFCI"]).tail(1).iloc[0],
-    "slope_2s10s_z": zscore(fred["slope_2s10s"]).tail(1).iloc[0],
-    "DFII10_z":      zscore(fred["DFII10"]).tail(1).iloc[0],
-    "T10YIE_z":      zscore(fred["T10YIE"]).tail(1).iloc[0],
-    "M2SL_yoy_z":    zscore(fred["M2SL_yoy"]).tail(1).iloc[0],
-    "TOTCI_yoy_z":   zscore(fred["TOTCI_yoy"]).tail(1).iloc[0],
+    # Risk-OFF / Defensive
+    "Rates / Duration": ["IEF"],                       # 7–10Y UST (duration proxy)
+    "Gold (Hedge)":     ["GLD"],
+    "USD & FX":         ["UUP"],                       # US Dollar index ETF
+    "Cash / Sidelines": ["BIL"],                       # 1–3M T-Bill
 }
 
-now = pd.Timestamp.utcnow().tz_localize(None)
-STALE_DAYS = {"FEDFUNDS":14,"NFCI":14,"DFII10":7,"T10YIE":7,"T10Y2Y":7,"PCEPILFE":60,"M2SL":60,"TOTCI":28}
+# Which buckets belong to risk-on vs risk-off for the Rotation Index
+RISK_ON  = {"Equities (Global)", "Credit / Carry", "Commodities", "Crypto / Spec"}
+RISK_OFF = {"Rates / Duration", "Gold (Hedge)", "USD & FX", "Cash / Sidelines"}
 
-def last_valid(series: pd.Series):
-    s = series.dropna()
-    if s.empty: return np.nan, None, True
-    d = pd.to_datetime(s.index[-1])
-    return float(s.iloc[-1]), d, False
+# Horizons (in trading days, ~ approximations)
+HORIZONS = {
+    "1m": 21,
+    "3m": 63,
+    "6m": 126,
+    "12m": 252,
+}
 
-LV = {}
-for code in fred_series:
-    v, d, _ = last_valid(fred[code]) if code in fred else (np.nan, None, True)
-    stale = (d is None) or ((now - d).days > STALE_DAYS.get(code, 30))
-    LV[code] = {"v": v, "date": d, "stale": stale}
-
-def asof_tag(d, stale):
-    if d is None: return ""
-    color = "#ef4444" if stale else "#9ca3af"
-    return f" <span style='color:{color}; font-size:11px'>(as of {pd.to_datetime(d).date()})</span>"
-
-rp = (LV["FEDFUNDS"]["v"] - LV["PCEPILFE"]["v"]) if hasnum(LV["FEDFUNDS"]["v"]) and hasnum(LV["PCEPILFE"]["v"]) else np.nan
-nf = LV["NFCI"]["v"]
-sl = LV["T10Y2Y"]["v"]
-
-def delta_3m(s: pd.Series):
-    s = s.dropna()
-    if len(s) < 14: return np.nan
-    return float(s.iloc[-1] - s.iloc[-14])
-
-rp_3m = delta_3m(fred["real_policy"])
-nf_3m = delta_3m(fred["NFCI"])
-sl_3m = delta_3m(fred["slope_2s10s"])
-
-rp_v = "tight" if hasnum(rp) and rp>0 else ("loose" if hasnum(rp) and rp<0 else "neutral")
-nf_v = "tight" if hasnum(nf) and nf>0 else ("loose" if hasnum(nf) and nf<-0.5 else "neutral")
-sl_v = "inv" if hasnum(sl) and sl<0 else "steep"
+# Weighting for the “share” calculation (softmax across buckets)
+SHARE_WEIGHTS = {"1m": 0.2, "3m": 0.3, "6m": 0.3, "12m": 0.2}
 
 # -----------------------------
-# 5) Horizon table + Momentum (Now vs 12M)
+# Data helpers
 # -----------------------------
-windows = {"Current":1,"4W":4,"12W":12,"6M":26,"12M":52,"2Y":104,"3Y":156,"4Y":208}
-def trailing_table(df, windows):
+
+def download_prices(tickers: List[str], start: str = "2019-01-01") -> pd.DataFrame:
+    """Download adjusted close prices for a list of tickers into one DataFrame."""
+    df = yf.download(tickers, start=start, auto_adjust=True, progress=False)["Close"]
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+    # Some crypto / fx may have missing weekends; forward-fill small gaps
+    df = df.sort_index().ffill()
+    return df
+
+def combined_bucket_price(tickers: List[str]) -> pd.Series:
+    """
+    Combine multiple proxies into a single bucket series.
+    Approach: equal-weighted normalized index rebased to 100.
+    """
+    prices = download_prices(tickers)
+    # Rebase each series to 100 and average (equal weight)
+    reindexed = prices / prices.iloc[0] * 100.0
+    bucket = reindexed.mean(axis=1)
+    bucket.name = "price"
+    return bucket
+
+def get_all_bucket_series() -> pd.DataFrame:
+    """Return DataFrame with one column per bucket (equal-weighted proxy index)."""
     cols = {}
-    for label, w in windows.items():
-        cols[label] = df.tail(1).T.squeeze() if w==1 else df.rolling(w, min_periods=max(4,w//4)).mean().iloc[-1]
-    return (pd.concat(cols, axis=1) * 100).round(2)
+    for bucket, ticks in BUCKETS.items():
+        cols[bucket] = combined_bucket_price(ticks)
+    df = pd.DataFrame(cols).dropna(how="all")
+    # Forward fill to align assets with uneven calendars
+    df = df.ffill()
+    return df
 
-table = trailing_table(bucketed, windows)
-row_order = [BUCKET_EQ,BUCKET_CR,BUCKET_RT,BUCKET_CMD,BUCKET_GLD,BUCKET_CRY,BUCKET_FX,BUCKET_CASH]
-table = table.reindex([r for r in row_order if r in table.index])
-ref_series  = table[MOM_COMPARE]
-curr_series = table["Current"]
-
-def momentum_cell(current_pct, ref_pct):
-    delta = current_pct - ref_pct
-    if   delta > 0.2:  msg, color = "Higher", "#16a34a"
-    elif delta < -0.2: msg, color = "Lower",  "#ef4444"
-    else:              msg, color = "Near",   "#6b7280"
-    txt = f'+{delta:.1f}pp' if delta >= 0 else f'−{abs(delta):.1f}pp'
-    return f"<div class='mom'><span class='pill' style='background:{color}'>{msg}</span><span class='delta'>{txt}</span></div>"
-
-momentum_cells = [momentum_cell(float(curr_series[b]), float(ref_series[b])) for b in table.index]
-table_display = table.copy()
-table_display.insert(0, "Momentum (Now vs "+MOM_COMPARE+")", momentum_cells)
-table_display.insert(0, "Bucket", table_display.index)
-
-def last_non_nan(series):
-    if series is None:
-        return np.nan
-    s = pd.to_numeric(series, errors="coerce").dropna()
-    return float(s.iloc[-1]) if len(s) else np.nan
-
-# -----------------------------
-# 6) Narrative tying flows to drivers
-# -----------------------------
-date_str = bucketed.index[-1].date().isoformat()
-risk_on_names = [BUCKET_EQ,BUCKET_CR,BUCKET_CMD,BUCKET_CRY]
-risk_off_names= [BUCKET_RT,BUCKET_GLD,BUCKET_FX,BUCKET_CASH]
-rn, ro = curr_series[risk_on_names].sum(), curr_series[risk_off_names].sum()
-rn_ref, ro_ref = ref_series[risk_on_names].sum(), ref_series[risk_off_names].sum()
-tilt = rn - ro - (rn_ref - ro_ref)
-drivers_flags = []
-if rp_v=="tight": drivers_flags.append("real policy restrictive")
-if nf_v=="tight": drivers_flags.append("financial conditions tight")
-if sl_v=="inv":   drivers_flags.append("curve inverted")
-if not drivers_flags: drivers_flags.append("drivers mixed")
-
-# -----------------------------
-# 7) Render dashboard (styles + layout)
-# -----------------------------
-def tint_cell(val, ref):
-    if pd.isna(val) or pd.isna(ref): return ""
-    diff = float(val) - float(ref)
-    if diff > 0.5:  return 'style="background:#eaf8ed;"'
-    if diff < -0.5: return 'style="background:#fdecec;"'
-    return ""
-
-styles = """
-<style>
-.rot-wrap { max-width:1320px; margin:10px auto; padding:0 12px;
-            font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial; color:#000; }
-.hdr { display:flex; justify-content:space-between; align-items:baseline; margin:6px 4px 10px 4px; color:#000; }
-.hdr h2 { margin:0; font-size:18px; color:#000; }
-.badge { padding:3px 8px; border-radius:999px; font-size:12px; color:#fff; }
-.badge.TIGHTENING { background:#ef4444; } .badge.NEUTRAL { background:#6b7280; } .badge.EASING { background:#16a34a; }
-.drivers { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:12px; margin:10px 2px 16px 2px; color:#000; }
-.card { background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:10px 12px;
-        box-shadow:0 1px 2px rgba(0,0,0,0.04); font-size:12.5px; color:#000; }
-.card h4 { margin:0 0 6px 0; font-size:12.8px; color:#000; }
-.kv { display:flex; justify-content:space-between; gap:10px; margin:2px 0; color:#000; }
-.kv span:first-child { color:#000; }
-.kv span:last-child { text-align:right; min-width:180px; }
-.rot-table { border-collapse: collapse; width:100%; background:#fff; color:#000; font-size:13px;
-             box-shadow:0 1px 3px rgba(0,0,0,0.08); table-layout:fixed; }
-.rot-table th, .rot-table td { border:1px solid #d1d5db; padding:8px 10px; text-align:center; vertical-align:middle;
-                               overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#000; }
-.rot-table thead th { background:#111; color:#fff; font-weight:700; }
-.rot-table tbody tr:nth-child(even) { background:#f9fafb; }
-.rot-table tbody tr:hover { background:#f3f4f6; }
-.col-bucket { width: 260px; text-align:left !important; }
-.col-momentum { width: 210px; overflow:visible !important; }
-.mom { display:flex; align-items:center; gap:8px; justify-content:flex-start; white-space:nowrap; }
-.pill { color:#fff; font-weight:600; font-size:12px; padding:1px 8px; border-radius:999px; }
-.delta { color:#111; font-size:12px; }
-.note { background:#fff; border:1px solid #e5e7eb; border-radius:8px; padding:12px 14px; margin:10px 0;
-        font-size:14px; color:#000; }
-.scroll-x { overflow-x:auto; -webkit-overflow-scrolling: touch; }
-.map-table { width:100%; border-collapse:collapse; background:#fff; }
-.map-table th, .map-table td { border:1px solid #e5e7eb; padding:8px 10px; text-align:left; white-space:nowrap; }
-.foot { font-size:12.5px; color:#000; line-height:1.55; margin-top:10px; background:#fff;
-        padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; }
-</style>
-"""
-
-if rp_v == "loose" and nf_v == "loose":
-    badge_color, badge_text, badge_class = "#16a34a", "EASING BIAS", "EASING"
-elif rp_v == "tight" or nf_v == "tight":
-    badge_color, badge_text, badge_class = "#ef4444", "TIGHTENING BIAS", "TIGHTENING"
-else:
-    badge_color, badge_text, badge_class = "#6b7280", "NEUTRAL / TRANSITION", "NEUTRAL"
-hdr_badge = f'<span class="badge {badge_class}" style="background:{badge_color}">{badge_text}</span>'
-date_str = bucketed.index[-1].date().isoformat()
-hdr_html = f"<div class='hdr'><h2>Cross-Asset Capital Rotation — Weekly ({date_str})</h2>{hdr_badge}</div>"
-
-def last_non_nan_safe(col):
-    try:
-        return last_non_nan(col)
-    except Exception:
-        return np.nan
-
-m2_yoy_val    = last_non_nan_safe(fred.get("M2SL_yoy"))
-totci_yoy_val = last_non_nan_safe(fred.get("TOTCI_yoy"))
-
-drivers_html = f"""
-<div class="drivers">
-  <div class="card">
-    <h4>Policy & Conditions</h4>
-    <div class="kv"><span>Fed funds (%, level)</span><span>{fmt(LV['FEDFUNDS']['v'])}{asof_tag(LV['FEDFUNDS']['date'], LV['FEDFUNDS']['stale'])}</span></div>
-    <div class="kv"><span>Real policy (FF − core PCE)</span><span>{fmt(rp,'%')} {badge('Restrictive','tight') if rp_v=='tight' else (badge('Accommodative','loose') if rp_v=='loose' else badge('Neutral','neutral'))}{fmt_chg3m(rp_3m,'pp')}</span></div>
-    <div class="kv"><span>NFCI</span><span>{fmt(nf)} {badge('Tight','tight') if nf_v=='tight' else (badge('Loose','loose') if nf_v=='loose' else badge('Neutral','neutral'))}{fmt_chg3m(nf_3m,'')}{asof_tag(LV['NFCI']['date'], LV['NFCI']['stale'])}</span></div>
-  </div>
-  <div class="card">
-    <h4>Real Rates & Inflation</h4>
-    <div class="kv"><span>Real 10Y (TIPS)</span><span>{fmt(LV['DFII10']['v'],'%')}{fmt_z(z_last.get('DFII10_z'))}{asof_tag(LV['DFII10']['date'], LV['DFII10']['stale'])}</span></div>
-    <div class="kv"><span>10Y breakeven</span><span>{fmt(LV['T10YIE']['v'],'%')}{fmt_z(z_last.get('T10YIE_z'))}{asof_tag(LV['T10YIE']['date'], LV['T10YIE']['stale'])}</span></div>
-    <div class="kv"><span>2s10s slope</span><span>{fmt(sl,'%')} {badge('Inverted','inv') if sl_v=='inv' else badge('Steepening','steep')}{fmt_chg3m(sl_3m,'pp')}{asof_tag(LV['T10Y2Y']['date'], LV['T10Y2Y']['stale'])}</span></div>
-  </div>
-  <div class="card">
-    <h4>Money & Credit</h4>
-    <div class="kv"><span>M2 YoY</span><span>{fmt(m2_yoy_val,'%')}{fmt_z(z_last.get('M2SL_yoy_z'))}{asof_tag(LV['M2SL']['date'], LV['M2SL']['stale'])}</span></div>
-    <div class="kv"><span>C&amp;I loans YoY</span><span>{fmt(totci_yoy_val,'%')}{fmt_z(z_last.get('TOTCI_yoy_z'))}{asof_tag(LV['TOTCI']['date'], LV['TOTCI']['stale'])}</span></div>
-  </div>
-</div>
-"""
-
-cols_keys = ["Current","4W","12W","6M","12M","2Y","3Y","4Y"]
-display_names = {"Current":"Current","4W":"4W","12W":"12W","6M":"6M",
-                 "12M":"12M","2Y":"2Y","3Y":"3Y","4Y":"4Y avg (structural)"}
-cols = ["Bucket","Momentum (Now vs "+MOM_COMPARE+")"] + [display_names[k] for k in cols_keys]
-
-html = [styles, '<div class="rot-wrap">', hdr_html, drivers_html,
-        '<table class="rot-table"><colgroup>',
-        '<col class="col-bucket">','<col class="col-momentum">', *["<col>"]*len(cols_keys),
-        '</colgroup><thead><tr>']
-for c in cols: html.append(f"<th>{c}</th>")
-html.append('</tr></thead><tbody>')
-
-for _, row in table_display.iterrows():
-    b = row["Bucket"]
-    html.append('<tr>')
-    html.append(f'<td class="col-bucket">{b}</td>')
-    html.append(f'<td class="col-momentum">{row["Momentum (Now vs "+MOM_COMPARE+")"]}</td>')
-    for k in cols_keys:
-        val = row[k] if pd.notna(row[k]) else ""
-        if val=="":
-            html.append("<td></td>")
+def multi_horizon_momentum(series: pd.Series, horizons: Dict[str, int]) -> pd.Series:
+    """Compute simple total returns over given horizons."""
+    out = {}
+    for label, lookback in horizons.items():
+        if len(series) <= lookback:
+            out[label] = np.nan
         else:
-            extra = f' {tint_cell(val, table.loc[b, "12M"])}' if k=="Current" else ""
-            html.append(f"<td{extra}>{val:.2f}%</td>")
-    html.append('</tr>')
-html.append('</tbody></table>')
+            out[label] = (series.iloc[-1] / series.iloc[-lookback] - 1.0) * 100.0  # % return
+    return pd.Series(out)
 
-foot = f"""
-<div class="foot">
-  <b>How to read:</b> Percentages show where market risk appetite sits by bucket across time horizons (left → right).
-  <b>Momentum</b> compares now vs {MOM_COMPARE} using a clear pill (Higher/Lower/Near) and the change in percentage points.
-  <b>4Y avg (structural)</b> is a long-horizon baseline — where each bucket tends to live across cycles.<br>
-  <b>Buckets:</b> {BUCKET_EQ}; {BUCKET_CR}; {BUCKET_RT}; {BUCKET_CMD}; {BUCKET_GLD}; {BUCKET_CRY}; {BUCKET_FX}; {BUCKET_CASH}.<br>
-  <b>Regime badge</b> reflects real policy + NFCI stance; driver cards show verdicts, 3-month arrows, and 5-year z-scores with per-series “as of” dates.
-</div>
-</div>
-"""
+def zscore(x: pd.Series) -> pd.Series:
+    mu, sigma = x.mean(), x.std(ddof=0)
+    if sigma == 0 or np.isnan(sigma):
+        return pd.Series(np.zeros_like(x), index=x.index)
+    return (x - mu) / sigma
 
-msg = f"""
-🧭 <b>Cycle snapshot – {bucketed.index[-1].date():%b %d %Y}</b><br>
-<b>Where we are:</b> Risk-on buckets = {curr_series[risk_on_names].sum():.1f}% vs baseline ~{RISK_ON_BASELINE:.0f}%; Risk-off = {curr_series[risk_off_names].sum():.1f}%.<br>
-<b>What’s changing:</b> Top risers vs {MOM_COMPARE} → {', '.join([f'{k} (+{v:.1f}pp)' for k,v in (curr_series-ref_series).sort_values().tail(2).items()])}. 
-Top fallers → {', '.join([f'{k} ({v:.1f}pp)' for k,v in (curr_series-ref_series).sort_values().head(2).items()])}.<br>
-<b>Why:</b> {', '.join(drivers_flags)}.
-"""
+# -----------------------------
+# Model the “share” and WoW
+# -----------------------------
 
-snapshot_html = f"<div class='rot-wrap'><div class='note'>{msg}</div></div>"
+@dataclass
+class BucketSnapshot:
+    table: pd.DataFrame        # columns: ['share','WoW_pp','1m','3m','6m','12m']
+    rotation_index_pp: float   # pp flow Risk-On -> Risk-Off
+    risk_on_share: float       # current total risk-on %
+    blurb: str                 # tiny auto commentary
+    heatmap: pd.DataFrame      # z-scored momentum matrix (rows=buckets, cols=horizons)
 
-rotation_map = pd.DataFrame({
-    "Regime":["Tightening","Neutral/Transition","Easing","Reflation","Stress"],
-    "Likely next rotation":["Cash → Duration / Credit","Duration → Credit / Equities",
-                            "USD → Equities / Commodities","Duration → Commodities / Gold",
-                            "Risk → Cash / USD"],
-    "Typical outcome":["Carry rally","Valuation expansion","Early-cycle rally",
-                       "Inflation hedge bid","Drawdown"]
-})
-map_html = f"<div class='rot-wrap'><div class='scroll-x'>{rotation_map.to_html(index=False, classes='map-table', escape=False)}</div></div>"
+def compute_snapshot() -> BucketSnapshot:
+    prices = get_all_bucket_series()
 
-# ---------- FINAL HTML WRITE (UTF-8 scaffold to avoid mojibake) ----------
-DOC_TITLE = f"Cross-Asset Capital Rotation — Weekly ({date_str})"
-HTML_DOC = f"""<!doctype html>
-<html lang="en">
+    # Compute multi-horizon momentum (levels in %)
+    mom = []
+    for bucket in prices.columns:
+        mom.append(multi_horizon_momentum(prices[bucket].dropna(), HORIZONS))
+    mom = pd.DataFrame(mom, index=prices.columns)  # buckets × horizons (%)
+
+    # Heatmap matrix: z-score across buckets, for each horizon
+    heatmap = pd.DataFrame(
+        {h: zscore(mom[h]) for h in HORIZONS.keys()},
+        index=mom.index
+    )
+
+    # Build a single scalar “score” for share via weighted sum of horizon momentum z-scores
+    score = pd.Series(0.0, index=heatmap.index)
+    for h, w in SHARE_WEIGHTS.items():
+        score += heatmap[h] * w
+
+    # Softmax to convert to percentages that sum to 100
+    exps = np.exp(score - score.max())  # numeric stability
+    share = (exps / exps.sum() * 100.0).rename("share")
+
+    # Load last week snapshot (if available) for WoW delta
+    prev = pd.read_parquet(LAST_WEEK_SNAPSHOT) if LAST_WEEK_SNAPSHOT.exists() else None
+    if prev is not None and "share" in prev.columns:
+        wow_pp = (share - prev["share"]).rename("WoW_pp")
+    else:
+        wow_pp = pd.Series(np.nan, index=share.index, name="WoW_pp")
+
+    # Rotation Index (pp): Risk-On outflow positive means into Risk-Off
+    rotation_index_pp = float(
+        wow_pp.loc[list(RISK_OFF)].sum(skipna=True) - wow_pp.loc[list(RISK_ON)].sum(skipna=True)
+    )
+
+    # Risk-on total share (for sparkline history)
+    risk_on_share = float(share.loc[list(RISK_ON)].sum())
+
+    # Tiny commentary: list top risers / fallers WoW
+    if wow_pp.notna().any():
+        top_rise = wow_pp.nlargest(2).dropna()
+        top_fall = wow_pp.nsmallest(2).dropna()
+        def fmt(items: pd.Series) -> str:
+            names = ", ".join(items.index)
+            vals = ", ".join(f"{v:+.1f}" for v in items.values)
+            return f"{names} ({vals} pp)"
+        blurb = f"Flows tilted out of {fmt(top_fall)} and into {fmt(top_rise)}."
+    else:
+        blurb = "First run — no WoW deltas yet."
+
+    # Build table
+    table = pd.concat([share, wow_pp, mom[["1m", "3m", "6m", "12m"]]], axis=1).reindex(share.sort_values(ascending=False).index)
+
+    # Persist this snapshot for next run
+    table.to_parquet(LAST_WEEK_SNAPSHOT)
+
+    return BucketSnapshot(
+        table=table,
+        rotation_index_pp=rotation_index_pp,
+        risk_on_share=risk_on_share,
+        blurb=blurb,
+        heatmap=heatmap.loc[table.index]  # same order as table
+    )
+
+# -----------------------------
+# Charts
+# -----------------------------
+
+def fig_table(snapshot: BucketSnapshot) -> go.Figure:
+    df = snapshot.table.copy()
+
+    def arrow(v):
+        if pd.isna(v): return ""
+        return "▲" if v > 0 else ("▼" if v < 0 else "•")
+
+    wow_with_arrows = df["WoW_pp"].apply(lambda v: f"{arrow(v)} {v:+.1f}" if pd.notna(v) else "—")
+    share_fmt = df["share"].map(lambda v: f"{v:.1f}%")
+    mom_cols = [df[c].map(lambda v: f"{v:+.1f}%") for c in ["1m","3m","6m","12m"]]
+
+    header = ["Bucket", "Share", "WoW Δ (pp)", "1m", "3m", "6m", "12m"]
+    cells  = [
+        df.index.tolist(),
+        share_fmt.tolist(),
+        wow_with_arrows.tolist(),
+        mom_cols[0].tolist(),
+        mom_cols[1].tolist(),
+        mom_cols[2].tolist(),
+        mom_cols[3].tolist(),
+    ]
+
+    fig = go.Figure(
+        data=[
+            go.Table(
+                header=dict(
+                    values=header,
+                    fill_color="lightgray",
+                    align="left",
+                    font=dict(size=12)
+                ),
+                cells=dict(
+                    values=cells,
+                    align="left",
+                    height=26
+                )
+            )
+        ]
+    )
+    fig.update_layout(margin=dict(l=10,r=10,t=10,b=10))
+    return fig
+
+def fig_heatmap(snapshot: BucketSnapshot) -> go.Figure:
+    mat = snapshot.heatmap
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=mat.values,
+            x=list(mat.columns),
+            y=list(mat.index),
+            coloraxis="coloraxis",
+            zmin=-2.5, zmax=2.5
+        )
+    )
+    fig.update_layout(
+        coloraxis=dict(colorscale="RdBu", cmin=-2.5, cmax=2.5, reversescale=True),
+        margin=dict(l=60,r=20,t=30,b=40),
+        title="Relative Positioning (z-score of momentum)"
+    )
+    return fig
+
+def fig_sparkline(history_csv: Path) -> go.Figure:
+    if history_csv.exists():
+        hist = pd.read_csv(history_csv, parse_dates=["date"])
+        hist = hist.drop_duplicates("date").sort_values("date").tail(8)  # last ~8 obs (~wks)
+    else:
+        hist = pd.DataFrame({"date":[pd.Timestamp.today().date()], "share":[np.nan]})
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=hist["date"],
+        y=hist["share"],
+        mode="lines+markers",
+        line=dict(width=2),
+        marker=dict(size=5)
+    ))
+    fig.update_layout(
+        height=160,
+        margin=dict(l=30,r=10,t=10,b=30),
+        yaxis_title="Risk-On Share (%)",
+        title="Risk-On Share (last 4–8 obs)"
+    )
+    return fig
+
+# -----------------------------
+# HTML Assembly
+# -----------------------------
+
+def build_html(snapshot: BucketSnapshot) -> str:
+    # Headline metrics
+    headline = f"""
+    <h2 style="margin:0">Cross-Asset Capital Rotation — Weekly</h2>
+    <p style="margin:4px 0 0 0;color:#555">
+      Rotation Index (Risk-On → Risk-Off, WoW): <b>{snapshot.rotation_index_pp:+.1f} pp</b><br/>
+      Current Risk-On Share: <b>{snapshot.risk_on_share:.1f}%</b>
+    </p>
+    <p style="margin:6px 0 16px 0">{snapshot.blurb}</p>
+    """
+
+    # Plotly figs (render to HTML fragments)
+    table_fig = fig_table(snapshot)
+    heatmap_fig = fig_heatmap(snapshot)
+    spark_fig = fig_sparkline(RISKON_HISTORY_CSV)
+
+    table_html   = table_fig.to_html(include_plotlyjs="cdn", full_html=False)
+    heatmap_html = heatmap_fig.to_html(include_plotlyjs=False, full_html=False)
+    spark_html   = spark_fig.to_html(include_plotlyjs=False, full_html=False)
+
+    html = f"""<!DOCTYPE html>
+<html>
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{DOC_TITLE}</title>
-  {styles}
+  <meta charset="utf-8"/>
+  <title>Cross-Asset Capital Rotation — Weekly</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
-    @media print {{
-      body {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
-      .rot-wrap {{ max-width: 980px; margin: 0 auto; }}
-      .rot-table th, .rot-table td {{ padding: 6px 8px; }}
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 24px; }}
+    .grid {{ display: grid; grid-template-columns: 1fr; gap: 16px; }}
+    @media (min-width: 1000px) {{
+      .grid {{ grid-template-columns: 1.2fr 0.8fr; }}
     }}
-    body {{ background:#fff; }}
+    .card {{ border: 1px solid #eee; border-radius: 10px; padding: 16px; }}
+    .muted {{ color:#666; font-size: 12px; }}
   </style>
 </head>
 <body>
-  <div class="rot-wrap">
-    {hdr_html}
+  {headline}
+  <div class="grid">
+    <div class="card">
+      <h3 style="margin-top:0">Bucket Snapshot</h3>
+      {table_html}
+      <p class="muted">Shares are normalized (softmax of momentum z-scores) so all buckets sum to 100%.</p>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Short-Run Context</h3>
+      {spark_html}
+      <div style="height:8px"></div>
+      <h3 style="margin:12px 0 6px 0">Rotation Heatmap</h3>
+      {heatmap_html}
+    </div>
   </div>
-  {drivers_html}
-  {"".join(html)}
-  {foot}
-  {snapshot_html}
-  {map_html}
+  <p class="muted">Generated: {pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M")} UTC</p>
 </body>
-</html>"""
+</html>
+"""
+    return html
 
-with open("report.html", "w", encoding="utf-8") as f:
-    f.write(HTML_DOC)
+# -----------------------------
+# Risk-on share history updater
+# -----------------------------
 
-print("✅ wrote report.html")
+def append_risk_on_history(value: float) -> None:
+    if RISKON_HISTORY_CSV.exists():
+        hist = pd.read_csv(RISKON_HISTORY_CSV)
+    else:
+        hist = pd.DataFrame(columns=["date","share"])
+    today = pd.Timestamp.today().date()
+    hist = pd.concat([hist, pd.DataFrame([{"date": today, "share": value}])], ignore_index=True)
+    hist = hist.drop_duplicates("date", keep="last").sort_values("date")
+    hist.to_csv(RISKON_HISTORY_CSV, index=False)
+
+# -----------------------------
+# Main
+# -----------------------------
+
+def main():
+    snapshot = compute_snapshot()
+    append_risk_on_history(snapshot.risk_on_share)
+    html = build_html(snapshot)
+    OUT_HTML.write_text(html, encoding="utf-8")
+    print("✅ wrote report.html")
+
+if __name__ == "__main__":
+    main()
