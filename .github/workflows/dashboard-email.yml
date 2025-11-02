@@ -1,5 +1,4 @@
-name: Dashboard Email
-on:
+name: Dashboard Emailon:
   workflow_dispatch:
   schedule:
     - cron: "30 6 * * *"
@@ -49,6 +48,8 @@ jobs:
           from: ${{ secrets.FROM_EMAIL }}
           to: ${{ secrets.TO_EMAIL }}
           subject: "Cross-Asset Rotation Dashboard — ${{ github.repository }} — run ${{ github.run_number }}"
+          nodemailerdebug: true
+          nodemailerlog: true
           body: "Daily build attached: report.pdf"
           attachments: report.pdf
 
