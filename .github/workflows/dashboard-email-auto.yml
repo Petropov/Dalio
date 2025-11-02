@@ -9,4 +9,4 @@ on:
 jobs:
   call-reusable:
     uses: ./.github/workflows/_send-dashboard.yml
-
+    secrets: inherit   # <<< add this line
