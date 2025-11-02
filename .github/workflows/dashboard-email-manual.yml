@@ -1,0 +1,9 @@
+name: Daily dashboard email (manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  call-reusable:
+    uses: ./.github/workflows/_send-dashboard.yml
+

@@ -1,0 +1,52 @@
+name: Send dashboard (reusable)
+
+on:
+  workflow_call:
+
+jobs:
+  build-and-email:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build report.html
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python dashboard.py
+          ls -lh report.html
+
+      - name: Make PDF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wkhtmltopdf
+          wkhtmltopdf --enable-local-file-access --quiet report.html report.pdf
+          ls -lh report.pdf
+
+      - name: Send email (attachment only)
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          secure: false
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          from: ${{ secrets.FROM_EMAIL }}
+          to: ${{ secrets.TO_EMAIL }}
+          subject: "Cross-Asset Rotation Dashboard — ${{ github.repository }} — run ${{ github.run_number }}"
+          body: "Daily build attached: report.pdf"
+          attachments: report.pdf
+          nodemailerdebug: true
+          nodemailerlog: true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report.pdf
+          path: report.pdf
+
+
+

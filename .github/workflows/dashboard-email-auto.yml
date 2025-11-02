@@ -1,0 +1,12 @@
+name: Daily dashboard email (auto)
+
+on:
+  schedule:
+    - cron: '0 7 * * 1-5'   # weekdays 07:00 UTC
+  push:
+    branches: [ main ]
+
+jobs:
+  call-reusable:
+    uses: ./.github/workflows/_send-dashboard.yml
+
