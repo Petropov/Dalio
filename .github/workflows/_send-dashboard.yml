@@ -1,11 +1,10 @@
-name: Send dashboard (reusable)
-
+name: _send-dashboard
 on:
   workflow_call:
 
 jobs:
   build-and-email:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -31,22 +30,21 @@ jobs:
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          secure: false
-          username: ${{ secrets.SMTP_USERNAME }}
-          password: ${{ secrets.SMTP_PASSWORD }}
-          from: ${{ secrets.FROM_EMAIL }}
-          to: ${{ secrets.TO_EMAIL }}
-          subject: "Cross-Asset Rotation Dashboard — ${{ github.repository }} — run ${{ github.run_number }}"
-          body: "Daily build attached: report.pdf"
-          attachments: report.pdf
+          server_port:    ${{ secrets.SMTP_PORT }}
+          secure:         false
+          username:       ${{ secrets.SMTP_USERNAME }}
+          password:       ${{ secrets.SMTP_PASSWORD }}
+          from:           ${{ secrets.FROM_EMAIL }}   # <<< uses secrets
+          to:             ${{ secrets.TO_EMAIL }}     # <<< uses secrets
+          subject:        "Cross-Asset Rotation Dashboard — ${{ github.repository }} — run ${{ github.run_number }}"
+          body:           "Daily build attached: report.pdf"
+          attachments:    report.pdf
           nodemailerdebug: true
-          nodemailerlog: true
+          nodemailerlog:   true
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload PDF artifact
+        if: always()   # <<< still upload even if email fails
+        uses: actions/upload-artifact@v4
         with:
           name: report.pdf
           path: report.pdf
-
-
-
