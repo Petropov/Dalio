@@ -13,6 +13,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import yfinance as yf
 
+# --- persistence ---
+DATA_DIR = Path("data"); DATA_DIR.mkdir(exist_ok=True)
+SNAP_FP = DATA_DIR / "last_week.parquet"
+HIST_FP = DATA_DIR / "risk_on_share.csv"
 OUT_DIR = Path("output")
 STATE_DIR = Path("state")
 OUT_DIR.mkdir(exist_ok=True, parents=True)
