@@ -1,4 +1,4 @@
-name: Daily dashboard email (manual)
+name: Weekly dashboard email (manual)
 
 on:
   workflow_dispatch:

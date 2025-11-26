@@ -38,7 +38,7 @@ jobs:
           from:           ${{ secrets.FROM_EMAIL }}
           to:             ${{ secrets.TO_EMAIL }}
           subject:        "Cross-Asset Rotation Dashboard — ${{ github.repository }} — run ${{ github.run_number }}"
-          body:           "Daily build attached: report.pdf"
+          body:           "Weekly build attached: report.pdf"
           attachments:    report.pdf
           nodemailerdebug: true
           nodemailerlog:   true
