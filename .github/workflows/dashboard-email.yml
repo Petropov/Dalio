@@ -1,9 +1,9 @@
-name: Dashboard Email
+name: Weekly Dashboard Email
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 6 * * *"
+    - cron: "30 6 * * 5"
 
 jobs:
   build-and-email:
@@ -51,7 +51,7 @@ jobs:
           subject: "Cross-Asset Rotation Dashboard — ${{ github.repository }} — run ${{ github.run_number }}"
           nodemailerdebug: true
           nodemailerlog: true
-          body: "Daily build attached: report.pdf"
+          body: "Weekly build attached: report.pdf"
           attachments: report.pdf
 
       - name: Upload artifact (optional)

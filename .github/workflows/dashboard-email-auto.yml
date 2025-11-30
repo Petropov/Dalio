@@ -1,8 +1,8 @@
-name: Daily dashboard email (auto)
+name: Weekly dashboard email (auto)
 
 on:
   schedule:
-    - cron: "0 9 * * 6"  # runs 09:00 UTC (≈10:00 CET) every Saturday
+    - cron: "0 9 * * 5"  # runs 09:00 UTC (≈10:00 CET) every Friday
   push:
     branches: [ main ]
 
