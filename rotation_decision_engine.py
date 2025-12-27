@@ -12,6 +12,43 @@ import pandas as pd
 AlignmentArrow = str
 
 
+BUCKETS: list[tuple[str, str]] = [
+    ("Equities (global stocks)", "ACWI"),
+    ("Credit / Carry (corp & EM bonds)", "HYG"),
+    ("Rates / Duration (govt bonds)", "IEF"),
+    ("Commodities (energy & metals)", "GSG"),
+    ("Gold (defensive hedge)", "GLD"),
+    ("Crypto / Spec (BTC, ETH)", "BTC-USD"),
+    ("USD & FX (US dollar & majors)", "UUP"),
+    ("Cash/Sidelines (synthetic)", "BIL"),
+]
+
+RISK_ON = {
+    "Equities (global stocks)",
+    "Credit / Carry (corp & EM bonds)",
+    "Commodities (energy & metals)",
+    "Crypto / Spec (BTC, ETH)",
+}
+
+DEFENSIVE = {
+    "Rates / Duration (govt bonds)",
+    "Gold (defensive hedge)",
+    "USD & FX (US dollar & majors)",
+    "Cash/Sidelines (synthetic)",
+}
+
+CYCLICAL = {name for name, _ in BUCKETS} - DEFENSIVE
+
+HORIZONS: dict[str, int] = {
+    "4W": 20,
+    "12W": 60,
+    "6M": 126,
+    "12M": 252,
+    "2Y": 504,
+    "3Y": 756,
+}
+
+
 @dataclass
 class SignalBundle:
     bucket: str
