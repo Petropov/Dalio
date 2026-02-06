@@ -274,7 +274,7 @@ def compute_weight_history(prices: pd.DataFrame) -> dict[str, list[float]]:
         momentums: list[float] = []
         bucket_moms: dict[str, float] = {}
         for bucket, _ in BUCKETS:
-            series = weekly[bucket].fillna(method="ffill")
+            series = weekly[bucket].ffill()
             returns = {
                 label: _ret_at_position(series, pos, weekly_windows[label]) for label in HORIZONS
             }

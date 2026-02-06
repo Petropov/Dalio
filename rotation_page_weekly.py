@@ -115,7 +115,7 @@ def compute_weight_history(prices: pd.DataFrame) -> dict[str, list[float]]:
     for pos in range(len(weekly)):
         momentums: list[float] = []
         for bucket, _ in BUCKETS:
-            series = weekly[bucket].fillna(method="ffill")
+            series = weekly[bucket].ffill()
             returns = {label: _ret_at_position(series, pos, weekly_windows[label]) for label in HORIZONS}
             short = _nanmean([returns["4W"], returns["12W"]])
             medium = _nanmean([returns["6M"], returns["12M"]])
