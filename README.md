@@ -9,6 +9,6 @@ The report opens with a **Decision Strip** that includes the regime call and con
 
 ## Weekly PDF
 
-- `rotation_page_weekly.py` renders a one-page allocator card (plus optional table page) to `output/rotation_weekly.pdf`.
+- `rotation_page_weekly.py` renders a print-ready landscape A3 sheet with two portrait A4 weekly cards side-by-side to `output/rotation_weekly.pdf`.
 - Run locally: `python rotation_page_weekly.py` after installing dependencies with `pip install -r requirements.txt`.
 

@@ -10,7 +10,7 @@ from typing import Iterable, List
 
 import pandas as pd
 import yfinance as yf
-from reportlab.lib.pagesizes import landscape, letter
+from reportlab.lib.pagesizes import A3, landscape
 from reportlab.pdfgen import canvas
 
 from pdf_components import THEME, draw_action_row, draw_callout_box, draw_card, draw_signal_matrix
@@ -309,7 +309,8 @@ def build_matrix_rows(bundles: List[SignalBundle]) -> list[dict]:
     return rows
 
 
-def render_weekly_pdf(
+def _draw_weekly_panel(
+    c: canvas.Canvas,
     bundles: List[SignalBundle],
     rotation_level: float,
     rotation_wow: float,
@@ -317,30 +318,32 @@ def render_weekly_pdf(
     regime: str,
     confidence: float,
     breakers: list[str],
-    output_path: Path,
+    panel_x: float,
+    panel_y: float,
+    panel_width: float,
+    panel_height: float,
 ) -> None:
-    page_width, page_height = landscape(letter)
-    margin = 36
-    c = canvas.Canvas(str(output_path), pagesize=(page_width, page_height))
+    margin = 24
     c.setFillColor(THEME.background)
-    c.rect(0, 0, page_width, page_height, stroke=False, fill=True)
+    c.rect(panel_x, panel_y, panel_width, panel_height, stroke=False, fill=True)
 
-    title_y = page_height - margin
-    c.setFont("Helvetica-Bold", 22)
+    title_y = panel_y + panel_height - margin
+    c.setFont("Helvetica-Bold", 18)
     c.setFillColor(THEME.ink)
-    c.drawString(margin, title_y, "Cross-Asset Capital Rotation — Weekly")
-    c.setFont("Helvetica", 10)
+    c.drawString(panel_x + margin, title_y, "Cross-Asset Capital Rotation — Weekly")
+    c.setFont("Helvetica", 9)
     c.setFillColor(THEME.muted)
-    c.drawString(margin, title_y - 16, f"As of {dt.date.today().isoformat()}")
+    c.drawString(panel_x + margin, title_y - 14, f"As of {dt.date.today().isoformat()}")
 
-    card_width = (page_width - margin * 2 - 16 * 2) / 3
-    card_height = 110
-    top_y = title_y - 30
+    card_gap = 10
+    card_width = (panel_width - margin * 2 - card_gap * 2) / 3
+    card_height = 96
+    top_y = title_y - 24
     risk_state = "Low" if risk_on_share < 40 else ("Medium" if risk_on_share < 60 else "High")
     risk_color = "🟢" if risk_state == "Low" else ("🟠" if risk_state == "Medium" else "🔴")
     draw_card(
         c,
-        margin,
+        panel_x + margin,
         top_y,
         card_width,
         card_height,
@@ -352,7 +355,7 @@ def render_weekly_pdf(
     delta_icon = "↑" if rotation_wow > 0 else ("↓" if rotation_wow < 0 else "→")
     draw_card(
         c,
-        margin + card_width + 16,
+        panel_x + margin + card_width + card_gap,
         top_y,
         card_width,
         card_height,
@@ -363,7 +366,7 @@ def render_weekly_pdf(
     )
     draw_card(
         c,
-        margin + (card_width + 16) * 2,
+        panel_x + margin + (card_width + card_gap) * 2,
         top_y,
         card_width,
         card_height,
@@ -373,27 +376,24 @@ def render_weekly_pdf(
         icon=risk_color,
     )
 
-    # Actions section
-    action_y = top_y - card_height - 24
+    action_y = top_y - card_height - 20
     c.setFillColor(THEME.ink)
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(margin, action_y, "THIS WEEK — DO THIS")
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(panel_x + margin, action_y, "THIS WEEK — DO THIS")
     rows = build_action_rows(bundles)
     inc_rows = [row for row in rows if row["category"] == "INCREASE"]
     hold_rows = [row for row in rows if row["category"] == "HOLD"]
     reduce_rows = [row for row in rows if row["category"] == "REDUCE"]
     filtered_rows = inc_rows[:3] + hold_rows[:2] + reduce_rows[:3]
-    action_height = 38
-    start_y = action_y - 18
-    for idx, row in enumerate(filtered_rows):
-        if idx >= 8:
-            break
-        y_pos = start_y - idx * (action_height + 6)
+    action_height = 34
+    start_y = action_y - 14
+    for idx, row in enumerate(filtered_rows[:8]):
+        y_pos = start_y - idx * (action_height + 5)
         draw_action_row(
             c,
-            margin,
+            panel_x + margin,
             y_pos,
-            page_width - 2 * margin,
+            panel_width - 2 * margin,
             action_height,
             row["bucket"],
             row["delta_text"],
@@ -402,17 +402,66 @@ def render_weekly_pdf(
             crowded=row["crowded"],
         )
 
-    # Bottom matrix and callout
-    matrix_y = start_y - len(filtered_rows) * (action_height + 6) - 12
-    c.setFont("Helvetica-Bold", 12)
+    matrix_y = start_y - len(filtered_rows[:8]) * (action_height + 5) - 8
+    c.setFont("Helvetica-Bold", 11)
     c.setFillColor(THEME.ink)
-    c.drawString(margin, matrix_y, "Why we tilt this way")
+    c.drawString(panel_x + margin, matrix_y, "Why we tilt this way")
     matrix_rows = build_matrix_rows(bundles)
-    draw_signal_matrix(c, margin, matrix_y - 14, page_width - 2 * margin - 180, 22, matrix_rows)
+    callout_width = 140
+    matrix_width = panel_width - 2 * margin - callout_width - 8
+    draw_signal_matrix(c, panel_x + margin, matrix_y - 12, matrix_width, 20, matrix_rows)
 
-    callout_x = page_width - margin - 170
-    callout_y = matrix_y
-    draw_callout_box(c, callout_x, callout_y, 170, 80, "What breaks this view?", breakers)
+    callout_x = panel_x + panel_width - margin - callout_width
+    draw_callout_box(c, callout_x, matrix_y, callout_width, 72, "What breaks this view?", breakers)
+
+
+def render_weekly_pdf(
+    bundles: List[SignalBundle],
+    rotation_level: float,
+    rotation_wow: float,
+    risk_on_share: float,
+    regime: str,
+    confidence: float,
+    breakers: list[str],
+    output_path: Path,
+) -> None:
+    """Render two portrait A4 panels on one landscape A3 page for print-ready 2-up output."""
+    page_width, page_height = landscape(A3)
+    c = canvas.Canvas(str(output_path), pagesize=(page_width, page_height))
+
+    panel_width = page_width / 2
+    _draw_weekly_panel(
+        c,
+        bundles,
+        rotation_level,
+        rotation_wow,
+        risk_on_share,
+        regime,
+        confidence,
+        breakers,
+        panel_x=0,
+        panel_y=0,
+        panel_width=panel_width,
+        panel_height=page_height,
+    )
+    _draw_weekly_panel(
+        c,
+        bundles,
+        rotation_level,
+        rotation_wow,
+        risk_on_share,
+        regime,
+        confidence,
+        breakers,
+        panel_x=panel_width,
+        panel_y=0,
+        panel_width=panel_width,
+        panel_height=page_height,
+    )
+
+    c.setStrokeColor(THEME.muted)
+    c.setLineWidth(1)
+    c.line(panel_width, 20, panel_width, page_height - 20)
 
     c.showPage()
     c.save()
