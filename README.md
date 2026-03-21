@@ -1,7 +1,7 @@
 
 # Dalio Rotation Dashboard
 
-Generates `report.html` and emails it weekly each Friday via GitHub Actions.
+Generates `report.html` and emails it once per week each Friday via GitHub Actions.
 - Edit schedule in `.github/workflows/dashboard-email.yml`
 - Core script: `dashboard.py`
 
@@ -11,4 +11,3 @@ The report opens with a **Decision Strip** that includes the regime call and con
 
 - `rotation_page_weekly.py` renders a one-page allocator card (plus optional table page) to `output/rotation_weekly.pdf`.
 - Run locally: `python rotation_page_weekly.py` after installing dependencies with `pip install -r requirements.txt`.
-
